@@ -131,13 +131,18 @@ struct BQ {
 
 // Brown & Duda head-shadow: H(s) = (2w0 + a*s) / (2w0 + s), w0 = c/a_head
 struct Shelf {
-    var b0: Float = 1, b1: Float = 0, a1: Float = 0, x1: Float = 0, y1: Float = 0
-    mutating func set(alpha: Double, sr: Double) {
+    var p: Float = 0, k: Float = 0, a1: Float = 0, x1: Float = 0, y1: Float = 0
+    var alpha: Float = 1, alphaT: Float = 1, ready = false
+    mutating func set(alpha a: Double, sr: Double) {
         let w0 = 343.0 / 0.0875, K = 2 * sr, d = 2 * w0 + K
-        b0 = Float((2 * w0 + alpha * K) / d); b1 = Float((2 * w0 - alpha * K) / d); a1 = Float((2 * w0 - K) / d)
+        p = Float(2 * w0 / d); k = Float(K / d); a1 = Float((2 * w0 - K) / d)
+        alphaT = Float(a); if !ready { ready = true; alpha = alphaT }
     }
+    // b0 = p + alpha*k, b1 = p - alpha*k, so alpha can glide sample by sample
     @inline(__always) mutating func run(_ x: Float) -> Float {
-        let y = b0 * x + b1 * x1 - a1 * y1; x1 = x; y1 = y; return y
+        alpha += (alphaT - alpha) * 0.004
+        let ak = alpha * k
+        let y = (p + ak) * x + (p - ak) * x1 - a1 * y1; x1 = x; y1 = y; return y
     }
 }
 
@@ -246,6 +251,8 @@ final class DSP {
     // read by the UI
     var t: Double = 0
     var meterL: Float = 0, meterR: Float = 0, inLevel: Float = 0
+    // health: late callbacks, short input buffers, worst processing time vs. buffer length
+    var calls = 0, late = 0, short = 0, worst: Double = 0, lastHost: UInt64 = 0
 
     init(sr: Double) {
         self.sr = sr
@@ -354,7 +361,6 @@ final class LiveEngine {
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
-    private let queue = DispatchQueue(label: "tech.rennko.spinaural.io", qos: .userInteractive)
     private(set) var outputName = ""
     var settings = Settings() { didSet { dsp?.update(settings) } }
     var bypass = false { didSet { dsp?.bypass = bypass } }
@@ -401,9 +407,14 @@ final class LiveEngine {
         let sr: Float64 = prop(aggID, kAudioDevicePropertyNominalSampleRate, 48000.0)
         let dsp = DSP(sr: sr); dsp.update(settings); dsp.bypass = bypass
         self.dsp = dsp
-        try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) { _, inData, _, outData, _ in
-            render(dsp, inData, outData)
-        }, "Starting audio")
+        // A plain C IOProc runs on the HAL's real-time IO thread (the block + dispatch-queue variant
+        // hops to an ordinary thread, which can miss deadlines and crackle).
+        let ioProc: AudioDeviceIOProc = { _, _, inData, _, outData, _, client in
+            guard let client else { return noErr }
+            render(Unmanaged<DSP>.fromOpaque(client).takeUnretainedValue(), inData, outData)
+            return noErr
+        }
+        try check(AudioDeviceCreateIOProcID(aggID, ioProc, Unmanaged.passUnretained(dsp).toOpaque(), &procID), "Starting audio")
         onlyTapInput()
         try check(AudioDeviceStart(aggID, procID), "Starting audio")
     }
@@ -435,6 +446,9 @@ final class LiveEngine {
     }
 }
 
+let timebase: Double = { var tb = mach_timebase_info_data_t(); mach_timebase_info(&tb); return Double(tb.numer) / Double(tb.denom) / 1e9 }()
+@inline(__always) func ticksToSec(_ t: UInt64) -> Double { Double(t) * timebase }
+
 // Real-time callback: tap audio comes in as the last input stream; write to the output device.
 func render(_ dsp: DSP, _ inData: UnsafePointer<AudioBufferList>, _ outData: UnsafeMutablePointer<AudioBufferList>) {
     let outs = UnsafeMutableAudioBufferListPointer(outData)
@@ -460,7 +474,15 @@ func render(_ dsp: DSP, _ inData: UnsafePointer<AudioBufferList>, _ outData: Uns
         } else { iL = UnsafePointer(last); iR = UnsafePointer(last); inFrames = Int(b.mDataByteSize) / 4 }
     }
     let n = min(frames, inFrames)
+    let t0 = mach_absolute_time()
+    if dsp.lastHost != 0 {
+        let gap = ticksToSec(t0 - dsp.lastHost), budget = Double(frames) / dsp.sr
+        if gap > budget * 1.6 { dsp.late += 1 }
+    }
+    dsp.lastHost = t0; dsp.calls += 1
+    if n < frames { dsp.short += 1 }
     dsp.process(n, iL, iR, iStride, oL, oR, oStride)
+    dsp.worst = max(dsp.worst, ticksToSec(mach_absolute_time() - t0) / (Double(max(1, frames)) / dsp.sr))
     if monoOut { for k in 0..<n { ob[k] = (scratch[2 * k] + scratch[2 * k + 1]) * 0.5 } }
 }
 
@@ -821,7 +843,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             k += 1
             if let d = self.model.engine.dsp {
                 let db = { (v: Float) in String(format: "%.1f", 20 * log10(v + 1e-9)) }
-                lines.append("t=\(String(format: "%.1f", d.t)) sr=\(Int(d.sr)) in=\(db(d.inLevel)) outL=\(db(d.meterL)) outR=\(db(d.meterR))")
+                lines.append("t=\(String(format: "%.1f", d.t)) sr=\(Int(d.sr)) in=\(db(d.inLevel)) outL=\(db(d.meterL)) outR=\(db(d.meterR)) calls=\(d.calls) late=\(d.late) short=\(d.short) worstLoad=\(String(format: "%.0f%%", d.worst * 100))")
             } else { lines.append("no dsp") }
             if k >= secs {
                 timer.invalidate(); self.model.turnOff()
@@ -849,7 +871,9 @@ func selfTest() {
     func run(_ name: String, _ s: Settings) {
         let d = DSP(sr: sr); d.update(s)
         var i = 0
+        let st = Date()
         while i < n { let c = min(512, n - i); d.process(c, inL + i, inR + i, 1, outL + 2 * i, outL + 2 * i + 1, 2); i += c }
+        print("  cpu: \(String(format: "%.1f", Date().timeIntervalSince(st) / Double(secs) * 100))% of real time")
         func band(_ hp: Double, _ lp: Double?) -> String {
             var fL = [BQ(highpass: true, hp, sr), BQ(highpass: true, hp, sr)], fR = fL
             var gL = lp.map { [BQ(highpass: false, $0, sr), BQ(highpass: false, $0, sr)] } ?? [], gR = gL
