@@ -1,0 +1,9 @@
+{
+  // Spinaural: static assets only, served from dist/ (./build.sh deploy)
+  "name": "spinaural",
+  "compatibility_date": "2025-10-01",
+  "assets": { "directory": "dist" },
+  // spinaural.rennko.tech/* is more specific than Rennko Cloud's *.rennko.tech/* route, so this host stays here
+  "routes": [{ "pattern": "spinaural.rennko.tech", "custom_domain": true }, { "pattern": "spinaural.rennko.tech/*", "zone_name": "rennko.tech" }],
+  "workers_dev": true
+}
