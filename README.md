@@ -7,7 +7,8 @@ Live at **https://spinaural.rennko.tech**
 - Drop in an MP3, M4A, WAV, FLAC, MP4, MOV or WebM file, or play the built-in demo loop.
 - Hear the effect live and flip between the 8D version and the original (press `B`).
 - **16D mode** splits the song into layers. The bass stays in the middle, the mids orbit one way, and the highs orbit the other way, faster and farther out.
-- 12 presets, including Classic 8D, Slow Dream, Fast Spin, 16D Classic, Crossfire and Swarm.
+- **360° mode** puts you in the room instead of spinning the sound. The band plays in front, and delayed copies come from the sides, behind and above, like real reflections.
+- 16 presets, including Classic 8D, Slow Dream, 16D Classic, Crossfire, Front Row, Arena and Living Room.
 - Bass boost up to +12 dB, kept separate from the presets.
 - Shape the motion: Orbit, Spiral, Ear to ear or Wander paths. You can also set the direction, lap time, distance, rise and fall, and room echo, and keep the bass centered.
 - Save the result as an MP3 (320 kbps) or a WAV. Videos can also be saved with the picture untouched and the 8D sound swapped in.
@@ -26,7 +27,7 @@ It all runs in the browser, so files are never uploaded.
 
 ## Spinaural for Mac (live)
 
-A menu bar app that spins **everything your Mac plays** (Spotify, YouTube, games, calls) into live 8D or 16D sound. It has the same presets, paths, room echo and bass boost as the web app.
+A menu bar app that spins **everything your Mac plays** (Spotify, YouTube, games, calls) into live 8D, 16D or 360° sound. It has the same presets, paths, room echo and bass boost as the web app.
 
 - Download the DMG from [Releases](https://github.com/learningnihongo934-byte/Spinaural/releases). It needs macOS 14.4 or later. The first time you open it, right-click the app and choose Open, because it isn't notarized.
 - Click the orbit icon in the menu bar, then **Spin my Mac**. The first time, macOS asks to let Spinaural record system audio.

@@ -74,6 +74,26 @@ let PRESETS: [Preset] = [
     Preset(no: "C2", name: "Crossfire", desc: "Two fast, tight orbits crossing behind your head.", s: mk(.orbit, -1, 4, 1.3, 15, .studio, 16, true, 16)),
     Preset(no: "C3", name: "Swarm", desc: "Every layer wanders off on its own in a big hall.", s: mk(.wander, 1, 11, 2.6, 55, .cathedral, 42, true, 16)),
     Preset(no: "C4", name: "Tug of War", desc: "Layers swing ear to ear, pulling against each other.", s: mk(.swing, 1, 7, 1.5, 0, .hall, 22, true, 16)),
+    Preset(no: "D1", name: "Front Row", desc: "Right by the stage, the crowd and room around you.", s: mk(.orbit, 1, 8, 1.6, 25, .hall, 34, true, 360)),
+    Preset(no: "D2", name: "Arena", desc: "Far from the stage in a huge echoing space.", s: mk(.orbit, 1, 8, 3.4, 25, .cathedral, 52, true, 360)),
+    Preset(no: "D3", name: "Living Room", desc: "Like the band is playing in your house.", s: mk(.orbit, 1, 8, 1.2, 25, .studio, 22, true, 360)),
+    Preset(no: "D4", name: "Club", desc: "Close, warm and loud, with sound bouncing off the walls.", s: mk(.orbit, 1, 8, 2, 25, .hall, 40, false, 360)),
+]
+
+let MODE_HINTS: [Int: String] = [
+    8: "The whole song moves as one voice around your head.",
+    16: "The song splits in layers. Bass stays put, mids go one way, highs go the other, faster.",
+    360: "Puts you in the room. The band plays in front, the room echoes all around you, and nothing spins.",
+]
+
+// 360 mode: virtual speakers around you (same layout as the web app)
+struct Speaker { let az: Double, el: Double, src: Int, ms: Double, gain: Float, rm: Double }  // src 0 = L, 1 = R, 2 = mid
+let SPEAKERS: [Speaker] = [
+    Speaker(az: -30, el: 0, src: 0, ms: 0, gain: 0.9, rm: 1), Speaker(az: 30, el: 0, src: 1, ms: 0, gain: 0.9, rm: 1),
+    Speaker(az: 0, el: 0, src: 2, ms: 0, gain: 0.55, rm: 1),
+    Speaker(az: -100, el: 0, src: 0, ms: 13, gain: 0.55, rm: 1.15), Speaker(az: 100, el: 0, src: 1, ms: 17, gain: 0.55, rm: 1.15),
+    Speaker(az: -145, el: 0, src: 0, ms: 23, gain: 0.45, rm: 1.25), Speaker(az: 145, el: 0, src: 1, ms: 29, gain: 0.45, rm: 1.25),
+    Speaker(az: -55, el: 40, src: 2, ms: 9, gain: 0.22, rm: 1.3), Speaker(az: 55, el: 40, src: 2, ms: 11, gain: 0.22, rm: 1.3),
 ]
 
 // MARK: - The path (same maths as the web app)
@@ -102,6 +122,14 @@ func pos(_ t: Double, _ s: Settings) -> Pos {
 func posB(_ t: Double, _ s: Settings) -> Pos {
     var s2 = s; s2.lap = s.lap * 0.62; s2.dir = -s.dir; s2.dist = min(4, s.dist * 1.15)
     return pos(t + s.lap * 0.3, s2)
+}
+
+func spkPos(_ i: Int, _ t: Double, _ s: Settings) -> Pos {
+    let sp = SPEAKERS[i]
+    let a = (sp.az + 5 * sin(TAU * t * (0.07 + Double(i) * 0.013) + Double(i) * 1.7)) * Double.pi / 180
+    let e = sp.el * Double.pi / 180, r = s.dist * sp.rm, h = r * cos(e)
+    let x = h * sin(a), z = -h * cos(a)
+    return Pos(x: x, y: r * sin(e), z: z, behind: max(0, z / max(0.001, hypot(x, z))))
 }
 
 // MARK: - DSP building blocks
@@ -244,6 +272,11 @@ final class DSP {
     private var lpL1: BQ, lpL2: BQ, lpR1: BQ, lpR2: BQ, hpL1: BQ, hpL2: BQ, hpR1: BQ, hpR2: BQ
     private var m1: BQ, m2: BQ, h1: BQ, h2: BQ
     private let A: Voice, B: Voice
+    private let spk: [Voice]
+    private let spkDelay: [Int]
+    private let dly: UnsafeMutablePointer<Float>   // 3 rings (L, R, mid) of 8192 samples
+    private var dw = 0
+    private var surG: Float = 0
     private let rev: Reverb
     private var fx: Float = 1, env: Float = 0
     private var dryG: Float = 1, wetG: Float = 0, mixG: Float = 1, bassG: Float = 1, splitG: Float = 0
@@ -262,6 +295,9 @@ final class DSP {
         m1 = BQ(highpass: false, 2400, sr); m2 = m1
         h1 = BQ(highpass: true, 2400, sr); h2 = h1
         A = Voice(sr: sr); B = Voice(sr: sr); rev = Reverb(sr: sr)
+        spk = SPEAKERS.map { _ in Voice(sr: sr) }
+        spkDelay = SPEAKERS.map { Int($0.ms / 1000 * sr) }
+        dly = .allocate(capacity: 3 * 8192); dly.initialize(repeating: 0, count: 3 * 8192)
         boL.lowShelf(100, 0, sr); boR = boL
     }
 
@@ -275,7 +311,8 @@ final class DSP {
             boostDB = s.boost
             boL.lowShelf(100, boostDB, sr); boR.b0 = boL.b0; boR.b1 = boL.b1; boR.b2 = boL.b2; boR.a1 = boL.a1; boR.a2 = boL.a2
         }
-        let split = s.layers == 16
+        let split = s.layers == 16, sur = s.layers == 360
+        let surT: Float = sur ? 1 : 0
         let mix = Float(s.echo / 100)
         let wetT = mix * 2.2 * Float(0.75 + 0.25 * (s.dist - 1) / 3)
         let dryT = 1 - 0.3 * mix
@@ -290,11 +327,13 @@ final class DSP {
             let chunk = min(32, frames - i)
             A.target(pos(t, s))
             if split { B.target(posB(t, s)) }
+            if sur || surG > 0.001 { for k in 0..<spk.count { spk[k].target(spkPos(k, t, s)) } }
             for j in i..<(i + chunk) {
                 let inL = iL[j * iStride], inR = iR[j * iStride]
                 sumIn += inL * inL + inR * inR
                 dryG += (dryT - dryG) * 0.001; wetG += (wetT - wetG) * 0.001; mixG += (mixT - mixG) * 0.001
                 bassG += (bassT - bassG) * 0.001; splitG += (splitT - splitG) * 0.001; fx += (fxT - fx) * 0.0015
+                surG += (surT - surG) * 0.001
 
                 let xL = boL.run(inL), xR = boR.run(inR)
                 let bL = lpL2.run(lpL1.run(xL)), bR = lpR2.run(lpR1.run(xR))
@@ -303,9 +342,21 @@ final class DSP {
                 let mono = ((hL + hR) * bassG + (xL + xR) * (1 - bassG)) * 0.5
                 let mid = m2.run(m1.run(mono)), hi = h2.run(h1.run(mono)) * 1.1
                 var aL: Float = 0, aR: Float = 0, cL: Float = 0, cR: Float = 0
-                A.run(mono * (1 - splitG) + mid * splitG, &aL, &aR)
+                A.run((mono * (1 - splitG) + mid * splitG) * (1 - surG), &aL, &aR)
                 if split || splitG > 0.001 { B.run(hi * splitG, &cL, &cR) }
-                let vL = aL + cL, vR = aR + cR
+                var vL = aL + cL, vR = aR + cR
+                if sur || surG > 0.001 {
+                    // stereo (non-bass) signal into the speaker rings, then each speaker reads its delayed copy
+                    let sL = (hL * bassG + xL * (1 - bassG)) * surG, sR = (hR * bassG + xR * (1 - bassG)) * surG
+                    dly[dw] = sL; dly[8192 + dw] = sR; dly[16384 + dw] = (sL + sR) * 0.5
+                    for k in 0..<spk.count {
+                        let sp = SPEAKERS[k]
+                        let v = dly[sp.src * 8192 + ((dw - spkDelay[k]) & 8191)] * sp.gain * 0.75
+                        var l: Float = 0, r: Float = 0
+                        spk[k].run(v, &l, &r); vL += l; vR += r
+                    }
+                    dw = (dw + 1) & 8191
+                }
                 var rL: Float = 0, rR: Float = 0
                 rev.run((vL + vR) * 0.5, fb, damp, &rL, &rR)
                 var l = (bL * bassG + vL * dryG + rL * wetG) * mixG
@@ -509,7 +560,7 @@ final class AppModel: ObservableObject {
     func turnOn() {
         do {
             try engine.start(); on = true; problem = false
-            status = "Spinning everything your Mac plays, out through \(engine.outputName)."
+            status = "On. Everything your Mac plays goes through Spinaural, out to \(engine.outputName)."
         } catch {
             on = false; problem = true; status = error.localizedDescription
         }
@@ -627,7 +678,8 @@ struct OrbitView: View {
         lab("L", CGPoint(x: c.x - 4.4 * sc - 8, y: c.y - 8)); lab("R", CGPoint(x: c.x + 4.4 * sc + 8, y: c.y - 8))
 
         let split = s.layers == 16
-        let voices: [((Double, Settings) -> Pos, Color)] = split ? [(pos, .sig), (posB, .blu)] : [(pos, .sig)]
+        let sur = s.layers == 360
+        let voices: [((Double, Settings) -> Pos, Color)] = sur ? [] : split ? [(pos, .sig), (posB, .blu)] : [(pos, .sig)]
         let span: Double = [s.lap, s.lap * 4, s.lap, s.lap * 2.5][s.pattern.rawValue]
         for (fn, col) in voices {
             var path = Path()
@@ -663,6 +715,18 @@ struct OrbitView: View {
             gc.fill(dot, with: .color(col)); gc.stroke(dot, with: .color(.ink), lineWidth: 1.8)
             gc.fill(Path(ellipseIn: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)), with: .color(.paper))
         }
+        if sur {
+            for i in 0..<SPEAKERS.count {
+                let sp = SPEAKERS[i], p = P(spkPos(i, t, s)), rad = 3.5 + Double(sp.gain) * 7
+                var line = Path(); line.move(to: c); line.addLine(to: p)
+                gc.stroke(line, with: .color(.sig.opacity(0.35)), style: StrokeStyle(lineWidth: 1, dash: [2, 4]))
+                let dot = Path(ellipseIn: CGRect(x: p.x - rad, y: p.y - rad, width: 2 * rad, height: 2 * rad))
+                gc.fill(dot, with: .color(.sig.opacity(sp.el > 0 ? 0.45 : 0.4 + Double(sp.gain) * 0.6)))
+                gc.stroke(dot, with: .color(.ink), lineWidth: 1.5)
+            }
+            gc.draw(Text("STAGE IN FRONT").font(.system(size: 9, design: .monospaced)).foregroundColor(.ink2), at: CGPoint(x: 4, y: size.height - 22), anchor: .leading)
+            gc.draw(Text("ROOM ALL AROUND").font(.system(size: 9, design: .monospaced)).foregroundColor(.ink2), at: CGPoint(x: 4, y: size.height - 9), anchor: .leading)
+        }
         if split {
             gc.fill(Path(ellipseIn: CGRect(x: 4, y: size.height - 30, width: 9, height: 9)), with: .color(.sig))
             gc.draw(Text("MIDS").font(.system(size: 9, design: .monospaced)).foregroundColor(.ink2), at: CGPoint(x: 18, y: size.height - 25.5), anchor: .leading)
@@ -693,13 +757,19 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     OrbitView(m: m)
                     presets
-                    Seg(title: "Mode", options: [("8D · one voice", 8), ("16D · split layers", 16)], value: $m.s.layers)
-                    Seg(title: "Path", options: Pattern.allCases.map { ($0.label, $0) }, value: $m.s.pattern)
-                    Text(m.s.pattern.hint).font(.system(size: 11)).foregroundColor(.ink3).padding(.top, -8)
-                    Seg(title: "Direction", options: [("Clockwise", 1.0), ("Counter-clockwise", -1.0)], value: $m.s.dir)
-                    Knob(title: "Lap time", value: $m.s.lap, range: 2...30, step: 0.5) { String(format: "%.1f s per lap", $0) }
-                    Knob(title: "Distance", value: $m.s.dist, range: 1...4, step: 0.1) { String(format: "%.1f m away", $0) }
+                    Seg(title: "Mode", options: [("8D", 8), ("16D", 16), ("360° · be there", 360)], value: $m.s.layers)
+                    Text(MODE_HINTS[m.s.layers] ?? "").font(.system(size: 11)).foregroundColor(.ink3).padding(.top, -8)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Seg(title: "Path", options: Pattern.allCases.map { ($0.label, $0) }, value: $m.s.pattern)
+                        Text(m.s.pattern.hint).font(.system(size: 11)).foregroundColor(.ink3).padding(.top, -8)
+                        Seg(title: "Direction", options: [("Clockwise", 1.0), ("Counter-clockwise", -1.0)], value: $m.s.dir)
+                        Knob(title: "Lap time", value: $m.s.lap, range: 2...30, step: 0.5) { String(format: "%.1f s per lap", $0) }
+                    }
+                    .disabled(m.s.layers == 360).opacity(m.s.layers == 360 ? 0.35 : 1)
+                    Knob(title: m.s.layers == 360 ? "Distance to the stage" : "Distance", value: $m.s.dist, range: 1...4, step: 0.1) { String(format: "%.1f m away", $0) }
                     Knob(title: "Rise and fall", value: $m.s.height, range: 0...100, step: 1) { "\(Int($0))%" }
+                        .disabled(m.s.layers == 360).opacity(m.s.layers == 360 ? 0.35 : 1)
                     Seg(title: "Room", options: Room.allCases.map { ($0.label, $0) }, value: $m.s.room)
                     Knob(title: "Echo", value: $m.s.echo, range: 0...100, step: 1) { $0 == 0 ? "Dry" : "\(Int($0))%" }
                     Toggle(isOn: $m.s.bass) { Text("Keep the bass in the middle").font(.system(size: 12, weight: .medium)) }
@@ -895,6 +965,7 @@ func selfTest() {
     }
     run("Classic 8D", PRESETS[0].s)
     run("16D Classic", PRESETS[8].s)
+    run("360 Front Row", PRESETS[12].s)
     var boosted = PRESETS[0].s; boosted.boost = 12
     run("Classic 8D +12dB bass", boosted)
 }
@@ -905,7 +976,7 @@ if ProcessInfo.processInfo.environment["SPINAURAL_SELFTEST"] != nil { selfTest()
 // SPINAURAL_SHOT=<png>: render the panel to an image (16D preset) and quit
 if let shot = ProcessInfo.processInfo.environment["SPINAURAL_SHOT"] {
   MainActor.assumeIsolated {
-    let m = AppModel(); var st = PRESETS[8].s; st.boost = 4; m.s = st
+    let m = AppModel(); var st = PRESETS[Int(ProcessInfo.processInfo.environment["SPINAURAL_SHOT_PRESET"] ?? "8") ?? 8].s; st.boost = 4; m.s = st
     let r = ImageRenderer(content: ContentView(m: m, flat: true)); r.scale = 2
     if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
        let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: shot)) }

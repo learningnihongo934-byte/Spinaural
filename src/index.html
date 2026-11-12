@@ -131,6 +131,7 @@ input[type=range]::-moz-range-thumb{width:10px; height:20px; border-radius:2px; 
 .presets button[aria-pressed=true] .no,.presets button[aria-pressed=true] .ds{color:var(--paper); opacity:.75}
 .presets button[aria-pressed=true] .no::before{content:"\25B6\FE0E "; color:var(--red); opacity:1}
 .presets button:focus-visible{outline:3px solid var(--blue); outline-offset:1px}
+.ctl.off{opacity:.35; pointer-events:none}
 .check{display:flex; gap:10px; align-items:center; cursor:pointer; font-weight:500}
 .check input{width:18px; height:18px; accent-color:var(--red)}
 
@@ -159,7 +160,7 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
     <h1>Spin<em>aural</em></h1>
   </div>
   <div>
-    <p class="tagline"><b>Stereo in the round.</b> Drop in a song or a video and it comes back circling your head. People call it 8D audio. There's a 16D mode too.</p>
+    <p class="tagline"><b>Stereo in the round.</b> Drop in a song or a video and it comes back circling your head. People call it 8D audio. There's 16D, and a 360&deg; mode that puts you in the room.</p>
     <div class="phones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="7" rx="1.5"/><rect x="17" y="14" width="4" height="7" rx="1.5"/></svg>Put your headphones on</div>
   </div>
 </header>
@@ -234,12 +235,13 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
       <div class="ctl">
         <div class="row"><span class="label">Mode</span></div>
         <div class="seg" role="group" aria-label="Mode" id="layers">
-          <button type="button" data-v="8">8D &middot; one voice</button>
-          <button type="button" data-v="16">16D &middot; split layers</button>
+          <button type="button" data-v="8">8D</button>
+          <button type="button" data-v="16">16D</button>
+          <button type="button" data-v="360">360&deg; &middot; be there</button>
         </div>
         <p class="hint" id="modeHint"></p>
       </div>
-      <div class="ctl">
+      <div class="ctl motion">
         <div class="row"><span class="label">Path</span></div>
         <div class="seg" role="group" aria-label="Path" id="pattern">
           <button type="button" data-v="orbit">Orbit</button>
@@ -249,14 +251,14 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
         </div>
         <p class="hint" id="patHint"></p>
       </div>
-      <div class="ctl">
+      <div class="ctl motion">
         <div class="row"><span class="label">Direction</span></div>
         <div class="seg" role="group" aria-label="Direction" id="dir">
           <button type="button" data-v="1">Clockwise</button>
           <button type="button" data-v="-1">Counter-clockwise</button>
         </div>
       </div>
-      <div class="ctl">
+      <div class="ctl motion">
         <div class="row"><label class="label" for="lap">Lap time</label><span class="val" id="lapV"></span></div>
         <input type="range" id="lap" min="2" max="30" step="0.5">
       </div>
@@ -264,7 +266,7 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
         <div class="row"><label class="label" for="dist">Distance</label><span class="val" id="distV"></span></div>
         <input type="range" id="dist" min="1" max="4" step="0.1">
       </div>
-      <div class="ctl">
+      <div class="ctl motion">
         <div class="row"><label class="label" for="height">Rise and fall</label><span class="val" id="heightV"></span></div>
         <input type="range" id="height" min="0" max="100" step="1">
       </div>
@@ -347,7 +349,27 @@ PRESETS.push(
   { no: 'C3', name: 'Swarm', desc: 'Every layer wanders off on its own in a big hall.', s: { pattern: 'wander', dir: 1, lap: 11, dist: 2.6, height: 55, roomType: 'cathedral', room: 42, bass: true, layers: 16 } },
   { no: 'C4', name: 'Tug of War', desc: 'Layers swing ear to ear, pulling against each other.', s: { pattern: 'swing', dir: 1, lap: 7, dist: 1.5, height: 0, roomType: 'hall', room: 22, bass: true, layers: 16 } },
 );
+PRESETS.push(
+  { no: 'D1', name: 'Front Row', desc: 'Right by the stage, the crowd and room around you.', s: { pattern: 'orbit', dir: 1, lap: 8, dist: 1.6, height: 25, roomType: 'hall', room: 34, bass: true, layers: 360 } },
+  { no: 'D2', name: 'Arena', desc: 'Far from the stage in a huge echoing space.', s: { pattern: 'orbit', dir: 1, lap: 8, dist: 3.4, height: 25, roomType: 'cathedral', room: 52, bass: true, layers: 360 } },
+  { no: 'D3', name: 'Living Room', desc: 'Like the band is playing in your house.', s: { pattern: 'orbit', dir: 1, lap: 8, dist: 1.2, height: 25, roomType: 'studio', room: 22, bass: true, layers: 360 } },
+  { no: 'D4', name: 'Club', desc: 'Close, warm and loud, with sound bouncing off the walls.', s: { pattern: 'orbit', dir: 1, lap: 8, dist: 2, height: 25, roomType: 'hall', room: 40, bass: false, layers: 360 } },
+);
+// 360 mode: virtual speakers around you. [azimuth°, elevation°, source, delay ms, gain, distance ×]
+const SPEAKERS = [
+  [-30, 0, 'L', 0, 0.9, 1], [30, 0, 'R', 0, 0.9, 1], [0, 0, 'M', 0, 0.55, 1],
+  [-100, 0, 'L', 13, 0.55, 1.15], [100, 0, 'R', 17, 0.55, 1.15],
+  [-145, 0, 'L', 23, 0.45, 1.25], [145, 0, 'R', 29, 0.45, 1.25],
+  [-55, 40, 'M', 9, 0.22, 1.3], [55, 40, 'M', 11, 0.22, 1.3],
+];
+function spkPos(i, t, s) {
+  const [az, el, , , , rm] = SPEAKERS[i];
+  const a = (az + 5 * Math.sin(TAU * t * (0.07 + i * 0.013) + i * 1.7)) * Math.PI / 180, e = el * Math.PI / 180, r = s.dist * rm;
+  const h = r * Math.cos(e), x = h * Math.sin(a), z = -h * Math.cos(a), y = r * Math.sin(e);
+  return { x, y, z, r, cutoff: 17000 * Math.pow(0.3, Math.max(0, z / Math.max(0.001, Math.hypot(x, z)))) };
+}
 const MODE_HINTS = {
+  360: 'Puts you in the room. The band plays in front, the room echoes all around you, and nothing spins.',
   8: 'The whole song moves as one voice around your head.',
   16: 'The song splits in layers. Bass stays put, mids go one way, highs go the other, faster.',
 };
@@ -424,6 +446,20 @@ function buildGraph(ctx, input) {
   g.dry = ctx.createGain(); g.wet = ctx.createGain(); g.conv = ctx.createConvolver();
   for (const pn of [g.panner, g.pannerB]) { pn.connect(g.dry); pn.connect(g.conv); }
   g.conv.connect(g.wet);
+  // 360: split the (non-bass) signal into L, R and mid, and send each to fixed speakers around you
+  const sp = ctx.createChannelSplitter(2); pre.connect(sp);
+  const ch = { L: ctx.createGain(), R: ctx.createGain(), M: ctx.createGain() }; ch.M.gain.value = 0.5;
+  sp.connect(ch.L, 0); sp.connect(ch.R, 1); sp.connect(ch.M, 0); sp.connect(ch.M, 1);
+  g.surG = ctx.createGain(); g.surG.gain.value = 0;
+  g.spk = SPEAKERS.map(([, , src, dms, gain]) => {
+    const d = ctx.createDelay(0.1); d.delayTime.value = dms / 1000;
+    const sh = ctx.createBiquadFilter(); sh.type = 'lowpass'; sh.Q.value = 0.5; sh.frequency.value = 17000;
+    const pn = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, rolloffFactor: 0.45, maxDistance: 50, positionZ: -1 });
+    const gn = ctx.createGain(); gn.gain.value = gain * 0.75;
+    ch[src].connect(d); d.connect(sh); sh.connect(pn); pn.connect(gn); gn.connect(g.surG);
+    return { sh, pn };
+  });
+  g.surG.connect(g.dry); g.surG.connect(g.conv);
   g.mix = ctx.createGain();
   g.bass.connect(g.mix); g.dry.connect(g.mix); g.wet.connect(g.mix);
   g.out = ctx.createDynamicsCompressor();
@@ -436,8 +472,9 @@ function buildGraph(ctx, input) {
 function applyStatic(g, s, ctx) {
   const offline = typeof OfflineAudioContext !== 'undefined' && ctx instanceof OfflineAudioContext;
   const set = (p, v) => offline ? (p.value = v) : p.setTargetAtTime(v, ctx.currentTime, 0.04);
-  const split = s.layers === 16;
-  set(g.one.gain, split ? 0 : 1); set(g.midG.gain, split ? 1 : 0); set(g.hiG.gain, split ? 1.1 : 0);
+  const split = s.layers === 16, sur = s.layers === 360;
+  set(g.one.gain, split || sur ? 0 : 1); set(g.midG.gain, split ? 1 : 0); set(g.hiG.gain, split ? 1.1 : 0);
+  set(g.surG.gain, sur ? 1 : 0);
   set(g.bass.gain, s.bass ? 1 : 0); set(g.hpGate.gain, s.bass ? 1 : 0); set(g.full.gain, s.bass ? 0 : 1);
   const mix = s.room / 100;
   set(g.wet.gain, mix * 0.9 * (0.75 + 0.25 * (s.dist - 1) / 3));
@@ -448,8 +485,8 @@ function applyStatic(g, s, ctx) {
     if (g.roomType === null) g.conv.buffer = impulse(ctx, s.roomType);
     else { // swap in a fresh convolver (some browsers refuse a second buffer)
       const c = ctx.createConvolver(); c.buffer = impulse(ctx, s.roomType);
-      g.panner.disconnect(g.conv); g.pannerB.disconnect(g.conv); g.conv.disconnect(); g.conv = c;
-      g.panner.connect(c); g.pannerB.connect(c); c.connect(g.wet);
+      g.panner.disconnect(g.conv); g.pannerB.disconnect(g.conv); g.surG.disconnect(g.conv); g.conv.disconnect(); g.conv = c;
+      g.panner.connect(c); g.pannerB.connect(c); g.surG.connect(c); c.connect(g.wet);
     }
     g.roomType = s.roomType;
   }
@@ -488,6 +525,13 @@ setInterval(() => {
   live.panner.positionY.setTargetAtTime(p.y, now, k);
   live.panner.positionZ.setTargetAtTime(p.z, now, k);
   live.shadow.frequency.setTargetAtTime(p.cutoff, now, 0.03);
+  if (S.layers === 360) {
+    live.spk.forEach((v, i) => {
+      const q = spkPos(i, el.currentTime, S);
+      v.pn.positionX.setTargetAtTime(q.x, now, 0.05); v.pn.positionY.setTargetAtTime(q.y, now, 0.05);
+      v.pn.positionZ.setTargetAtTime(q.z, now, 0.05); v.sh.frequency.setTargetAtTime(q.cutoff, now, 0.05);
+    });
+  }
   if (S.layers === 16) {
     const q = posB(el.currentTime, S);
     live.pannerB.positionX.setTargetAtTime(q.x, now, k);
@@ -593,6 +637,14 @@ async function render(buffer, s, onProg) {
   g.panner.positionY.setValueCurveAtTime(Y, 0, dur);
   g.panner.positionZ.setValueCurveAtTime(Z, 0, dur);
   g.shadow.frequency.setValueCurveAtTime(F, 0, dur);
+  if (s.layers === 360) {
+    g.spk.forEach((v, k) => {
+      const Xs = new Float32Array(n), Ys = new Float32Array(n), Zs = new Float32Array(n), Fs = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const p = spkPos(k, i / cr, s); Xs[i] = p.x; Ys[i] = p.y; Zs[i] = p.z; Fs[i] = p.cutoff; }
+      v.pn.positionX.setValueCurveAtTime(Xs, 0, dur); v.pn.positionY.setValueCurveAtTime(Ys, 0, dur);
+      v.pn.positionZ.setValueCurveAtTime(Zs, 0, dur); v.sh.frequency.setValueCurveAtTime(Fs, 0, dur);
+    });
+  }
   if (s.layers === 16) {
     const X2 = new Float32Array(n), Y2 = new Float32Array(n), Z2 = new Float32Array(n), F2 = new Float32Array(n);
     for (let i = 0; i < n; i++) { const p = posB(i / cr, s); X2[i] = p.x; Y2[i] = p.y; Z2[i] = p.z; F2[i] = p.cutoff; }
@@ -720,7 +772,7 @@ async function exportAs(kind) {
   $('status').classList.add('show');
   try {
     const out = await getRendered(prog);
-    const base = file.name.replace(/\.[^.]+$/, '') + (S.layers === 16 ? ' (16D)' : ' (8D)');
+    const base = file.name.replace(/\.[^.]+$/, '') + ({ 16: ' (16D)', 360: ' (360)' }[S.layers] || ' (8D)');
     if (kind === 'mp3') { download(await mp3Blob(out, prog), base + '.mp3'); }
     else if (kind === 'wav') { prog('Writing the WAV', 0.5); await tick(); download(wavBlob(out), base + '.wav'); }
     else { const { blob, ext } = await videoBlob(out, prog); download(blob, base + '.' + ext); }
@@ -820,7 +872,8 @@ function draw() {
   // upcoming path(s)
   const split = S.layers === 16;
   const span = { orbit: S.lap, swing: S.lap, spiral: S.lap * 4, wander: S.lap * 2.5 }[S.pattern];
-  const voices = split ? [[pos, colors.red], [posB, colors.blue]] : [[pos, colors.red]];
+  const sur = S.layers === 360;
+  const voices = sur ? [] : split ? [[pos, colors.red], [posB, colors.blue]] : [[pos, colors.red]];
   g2.lineWidth = 1.5; g2.setLineDash([5, 5]);
   for (const [fn, col] of voices) {
     g2.strokeStyle = split ? col : colors.ink2; g2.globalAlpha = split ? 0.45 : 0.55;
@@ -846,6 +899,18 @@ function draw() {
     return;
   }
   for (const [fn, col] of voices) drawVoice(fn, col, t, X, Y, c);
+  if (sur) {
+    SPEAKERS.forEach((sp, i) => {
+      const p = spkPos(i, t, S), rad = 4 + sp[4] * 8;
+      g2.strokeStyle = colors.red; g2.globalAlpha = 0.35; g2.lineWidth = 1; g2.setLineDash([2, 4]);
+      g2.beginPath(); g2.moveTo(c, c); g2.lineTo(X(p), Y(p)); g2.stroke(); g2.setLineDash([]); g2.globalAlpha = 1;
+      g2.fillStyle = colors.red; g2.globalAlpha = sp[1] ? 0.45 : 0.4 + sp[4] * 0.6;
+      g2.beginPath(); g2.arc(X(p), Y(p), rad, 0, TAU); g2.fill(); g2.globalAlpha = 1;
+      g2.strokeStyle = colors.ink; g2.lineWidth = 1.6; g2.stroke();
+    });
+    g2.font = '500 11px "IBM Plex Mono", monospace'; g2.textAlign = 'left'; g2.fillStyle = colors.ink2;
+    g2.fillText('STAGE IN FRONT', 6, w - 24); g2.fillText('ROOM ALL AROUND', 6, w - 8);
+  }
   if (split) { // legend
     g2.font = '500 11px "IBM Plex Mono", monospace'; g2.textAlign = 'left';
     g2.fillStyle = colors.red; g2.beginPath(); g2.arc(10, w - 30, 5, 0, TAU); g2.fill(); g2.fillStyle = colors.ink2; g2.fillText('MIDS', 20, w - 26);
@@ -905,6 +970,7 @@ function bindRange(id, key, fmtV) {
 function changed() {
   $('patHint').textContent = HINTS[S.pattern];
   $('modeHint').textContent = MODE_HINTS[S.layers];
+  document.querySelectorAll('.ctl.motion').forEach((e) => e.classList.toggle('off', S.layers === 360));
   const hit = PRESETS.find((p) => Object.keys(p.s).every((k) => p.s[k] === S[k]));
   $('presets').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(!!hit && b.dataset.no === hit.no)));
   $('presetV').textContent = hit ? hit.name : 'Custom';
