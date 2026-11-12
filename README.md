@@ -24,7 +24,24 @@ It all runs in the browser, so files are never uploaded.
 - MP3s are encoded with [lamejs](https://github.com/zhuker/lamejs).
 - Videos are remuxed with [Mediabunny](https://mediabunny.dev). The video packets are copied as they are, and the new audio is encoded as AAC (or Opus for WebM).
 
-## Build
+## Spinaural for Mac (live)
+
+A menu bar app that spins **everything your Mac plays** (Spotify, YouTube, games, calls) into live 8D or 16D sound. It has the same presets, paths, room echo and bass boost as the web app.
+
+- Download the DMG from [Releases](https://github.com/learningnihongo934-byte/Spinaural/releases). It needs macOS 14.4 or later. The first time you open it, right-click the app and choose Open, because it isn't notarized.
+- Click the orbit icon in the menu bar, then **Spin my Mac**. The first time, macOS asks to let Spinaural record system audio.
+- It uses a Core Audio process tap that mutes the original sound while Spinaural is on, so you only hear the spun version. Stop or quit, and your Mac sounds normal again.
+- The spatializer is native Swift: a spherical-head HRTF model (interaural time delay plus a Brown & Duda head-shadow shelf), a darker tone behind your head, Freeverb for the room, and the same LR4 crossovers as the web app.
+
+```bash
+cd mac
+./build.sh            # build mac/build.noindex/Spinaural.app
+./build.sh install    # copy to /Applications and open
+./build.sh dmg        # universal DMG for releases
+./build.sh selftest   # offline DSP check, no audio devices needed
+```
+
+## Build (web)
 
 ```bash
 ./build.sh          # build dist/
