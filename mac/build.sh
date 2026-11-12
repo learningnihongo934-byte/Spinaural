@@ -32,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Spinaural</string>
   <key>CFBundleIconFile</key><string>Spinaural</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.1.0</string>
+  <key>CFBundleShortVersionString</key><string>1.2.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>$MIN</string>
   <key>LSUIElement</key><true/>

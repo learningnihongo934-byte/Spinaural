@@ -9,7 +9,7 @@ Live at **https://spinaural.rennko.tech**
 - **16D mode** splits the song into layers. The bass stays in the middle, the mids orbit one way, and the highs orbit the other way, faster and farther out.
 - **360° mode** puts you in the room instead of spinning the sound. The band plays in front, and delayed copies come from the sides, behind and above, like real reflections.
 - 16 presets, including Classic 8D, Slow Dream, 16D Classic, Crossfire, Front Row, Arena and Living Room.
-- Bass boost up to +12 dB, kept separate from the presets.
+- Bass boost and volume boost (each up to +12 dB), kept separate from the presets. A limiter keeps the volume boost from distorting.
 - Shape the motion: Orbit, Spiral, Ear to ear or Wander paths. You can also set the direction, lap time, distance, rise and fall, and room echo, and keep the bass centered.
 - Save the result as an MP3 (320 kbps) or a WAV. Videos can also be saved with the picture untouched and the 8D sound swapped in.
 

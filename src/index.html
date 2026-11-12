@@ -291,6 +291,11 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
         <input type="range" id="boost" min="0" max="12" step="0.5">
         <p class="hint">Adds weight to the low end. Presets leave it where you set it.</p>
       </div>
+      <div class="ctl">
+        <div class="row"><label class="label" for="vol">Volume boost</label><span class="val" id="volV"></span></div>
+        <input type="range" id="vol" min="0" max="12" step="0.5">
+        <p class="hint">Louder than your device's max. A limiter keeps it from distorting.</p>
+      </div>
     </section>
   </div>
 
@@ -321,7 +326,7 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
 /* ================== state ================== */
 const $ = (id) => document.getElementById(id);
 const TAU = Math.PI * 2;
-const DEFAULTS = { pattern: 'orbit', dir: 1, lap: 8, dist: 1.6, height: 25, roomType: 'hall', room: 30, bass: true, layers: 8, boost: 0 };
+const DEFAULTS = { pattern: 'orbit', dir: 1, lap: 8, dist: 1.6, height: 25, roomType: 'hall', room: 30, bass: true, layers: 8, boost: 0, vol: 0 };
 let S = { ...DEFAULTS };
 try { Object.assign(S, JSON.parse(localStorage.getItem('spinaural.settings') || '{}')); } catch {}
 const save = () => { try { localStorage.setItem('spinaural.settings', JSON.stringify(S)); } catch {} };
@@ -463,8 +468,10 @@ function buildGraph(ctx, input) {
   g.mix = ctx.createGain();
   g.bass.connect(g.mix); g.dry.connect(g.mix); g.wet.connect(g.mix);
   g.out = ctx.createDynamicsCompressor();
-  g.out.threshold.value = -2; g.out.knee.value = 2; g.out.ratio.value = 14; g.out.attack.value = 0.003; g.out.release.value = 0.2;
-  g.mix.connect(g.out);
+  g.out.threshold.value = -3; g.out.knee.value = 1; g.out.ratio.value = 20; g.out.attack.value = 0.003; g.out.release.value = 0.2;
+  g.vol = ctx.createGain(); g.mix.connect(g.vol); g.vol.connect(g.out);
+  // the compressor adds automatic make-up gain; trim it so peaks stay under 0 dBFS
+  const comp = g.out; g.out = ctx.createGain(); g.out.gain.value = 0.72; comp.connect(g.out);
   g.roomType = null;
   return g;
 }
@@ -480,6 +487,7 @@ function applyStatic(g, s, ctx) {
   set(g.wet.gain, mix * 0.9 * (0.75 + 0.25 * (s.dist - 1) / 3));
   set(g.dry.gain, 1 - 0.3 * mix);
   set(g.boost.gain, s.boost || 0);
+  set(g.vol.gain, Math.pow(10, (s.vol || 0) / 20));
   set(g.mix.gain, (1.05 + 0.25 * (s.dist - 1)) * Math.pow(10, -(s.boost || 0) / 40)); // distance makeup, minus some boost headroom
   if (g.roomType !== s.roomType) {
     if (g.roomType === null) g.conv.buffer = impulse(ctx, s.roomType);
@@ -984,6 +992,7 @@ bindSeg('roomType', 'roomType');
 bindRange('lap', 'lap', (v) => `${v.toFixed(1)} s per lap`);
 bindRange('dist', 'dist', (v) => `${v.toFixed(1)} m away`);
 bindRange('height', 'height', (v) => `${v}%`);
+bindRange('vol', 'vol', (v) => (v ? `+${v} dB` : 'Off'));
 bindRange('boost', 'boost', (v) => (v ? `+${v} dB` : 'Off'));
 bindRange('room', 'room', (v) => (v ? `${v}%` : 'Dry'));
 $('bass').checked = S.bass;

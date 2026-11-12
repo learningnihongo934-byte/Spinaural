@@ -48,6 +48,7 @@ struct Settings: Codable, Equatable {
     var bass = true
     var layers = 8
     var boost: Double = 0   // dB, not part of presets
+    var vol: Double = 0     // dB of volume boost, not part of presets
 
     func matches(_ p: Settings) -> Bool {
         pattern == p.pattern && dir == p.dir && abs(lap - p.lap) < 0.01 && abs(dist - p.dist) < 0.01 &&
@@ -279,6 +280,12 @@ final class DSP {
     private var surG: Float = 0
     private let rev: Reverb
     private var fx: Float = 1, env: Float = 0
+    private var volG: Float = 1
+    // look-ahead limiter: the output is delayed by `la` samples so the gain can duck before a peak lands
+    private let la: Int
+    private let laBuf: UnsafeMutablePointer<Float>   // 2 x 512 (L, R)
+    private var lw = 0, hold: Float = 0, holdN = 0, limG: Float = 1
+    private let atk: Float
     private var dryG: Float = 1, wetG: Float = 0, mixG: Float = 1, bassG: Float = 1, splitG: Float = 0
 
     // read by the UI
@@ -298,6 +305,8 @@ final class DSP {
         spk = SPEAKERS.map { _ in Voice(sr: sr) }
         spkDelay = SPEAKERS.map { Int($0.ms / 1000 * sr) }
         dly = .allocate(capacity: 3 * 8192); dly.initialize(repeating: 0, count: 3 * 8192)
+        la = max(16, Int(0.0015 * sr)); atk = 1 - Float(exp(-4.0 / Double(la)))
+        laBuf = .allocate(capacity: 1024); laBuf.initialize(repeating: 0, count: 1024)
         boL.lowShelf(100, 0, sr); boR = boL
     }
 
@@ -319,6 +328,7 @@ final class DSP {
         let mixT = Float((1.05 + 0.25 * (s.dist - 1)) * pow(10, -s.boost / 40))
         let bassT: Float = s.bass ? 1 : 0, splitT: Float = split ? 1 : 0
         let fxT: Float = bypass ? 0 : 1
+        let volT = Float(pow(10, s.vol / 20))
         let fb = s.room.feedback, damp = s.room.damp
         var sumL: Float = 0, sumR: Float = 0, sumIn: Float = 0
 
@@ -362,9 +372,18 @@ final class DSP {
                 var l = (bL * bassG + vL * dryG + rL * wetG) * mixG
                 var r = (bR * bassG + vR * dryG + rR * wetG) * mixG
                 l = l * fx + inL * (1 - fx); r = r * fx + inR * (1 - fx)
-                // brickwall-ish limiter
-                env = max(abs(l), abs(r), env * 0.9997)
-                if env > 0.96 { let k = 0.96 / env; l *= k; r *= k }
+                // volume boost applies to both the 8D sound and the original, so A/B stays fair
+                volG += (volT - volG) * 0.0005
+                l *= volG; r *= volG
+                // look-ahead limiter: hold the loudest peak for `la` samples and duck smoothly before it plays
+                let pk = max(abs(l), abs(r))
+                if pk >= hold { hold = pk; holdN = la } else if holdN > 0 { holdN -= 1 } else { hold = max(pk, hold * 0.9995) }
+                let gT: Float = hold > 0.94 ? 0.94 / hold : 1
+                limG += (gT - limG) * (gT < limG ? atk : 0.00025)
+                laBuf[lw] = l; laBuf[512 + lw] = r
+                let rd = (lw - la) & 511
+                l = max(-0.99, min(0.99, laBuf[rd] * limG)); r = max(-0.99, min(0.99, laBuf[512 + rd] * limG))
+                lw = (lw + 1) & 511
                 oL[j * oStride] = l; oR[j * oStride] = r
                 sumL += l * l; sumR += r * r
             }
@@ -550,8 +569,17 @@ final class AppModel: ObservableObject {
     private let t0 = Date()
 
     init() {
-        if let d = UserDefaults.standard.data(forKey: "settings"), let v = try? JSONDecoder().decode(Settings.self, from: d) { s = v }
-        else { s = Settings() }
+        // merge saved keys over the defaults, so settings saved by older versions still load
+        var loaded = Settings()
+        if let d = UserDefaults.standard.data(forKey: "settings"),
+           let saved = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           let defData = try? JSONEncoder().encode(Settings()),
+           var base = try? JSONSerialization.jsonObject(with: defData) as? [String: Any] {
+            base.merge(saved) { $1 }
+            if let merged = try? JSONSerialization.data(withJSONObject: base),
+               let v = try? JSONDecoder().decode(Settings.self, from: merged) { loaded = v }
+        }
+        s = loaded
         engine.settings = s
     }
     private func save() { if let d = try? JSONEncoder().encode(s) { UserDefaults.standard.set(d, forKey: "settings") } }
@@ -775,6 +803,8 @@ struct ContentView: View {
                     Toggle(isOn: $m.s.bass) { Text("Keep the bass in the middle").font(.system(size: 12, weight: .medium)) }
                         .toggleStyle(.checkbox).tint(.sig)
                     Knob(title: "Bass boost", value: $m.s.boost, range: 0...12, step: 0.5) { $0 == 0 ? "Off" : String(format: "+%g dB", $0) }
+                    Knob(title: "Volume boost", value: $m.s.vol, range: 0...12, step: 0.5) { $0 == 0 ? "Off" : String(format: "+%g dB", $0) }
+                    Text("Louder than your Mac's max. A limiter keeps it from distorting.").font(.system(size: 11)).foregroundColor(.ink3).padding(.top, -8)
                 }
                 .padding(16)
     }
@@ -822,7 +852,7 @@ struct ContentView: View {
                 ForEach(PRESETS, id: \.no) { p in
                     let on = m.s.matches(p.s)
                     Button {
-                        var n = p.s; n.boost = m.s.boost; m.s = n
+                        var n = p.s; n.boost = m.s.boost; n.vol = m.s.vol; m.s = n
                     } label: {
                         HStack(alignment: .top, spacing: 5) {
                             Text(p.no).font(.system(size: 9.5, design: .monospaced)).foregroundColor(on ? .sig : .ink3).padding(.top, 2)
@@ -959,13 +989,16 @@ func selfTest() {
         }
         var peak: Float = 0, nan = false
         for k in 0..<(2 * n) { peak = max(peak, abs(outL[k])); if outL[k].isNaN { nan = true } }
-        print("\(name): peak=\(String(format: "%.2f", peak)) nan=\(nan)")
+        var e: Double = 0; for k in 0..<(2 * n) { e += Double(outL[k] * outL[k]) }
+        print("\(name): peak=\(String(format: "%.2f", peak)) rms=\(String(format: "%.1f", 10 * log10(e / Double(2 * n)))) dB nan=\(nan)")
         print("  mids  L-R dB/s: \(band(400, 2000))")
         print("  highs L-R dB/s: \(band(5000, nil))")
     }
     run("Classic 8D", PRESETS[0].s)
     run("16D Classic", PRESETS[8].s)
     run("360 Front Row", PRESETS[12].s)
+    var loud = PRESETS[0].s; loud.vol = 12
+    run("Classic 8D +12dB volume", loud)
     var boosted = PRESETS[0].s; boosted.boost = 12
     run("Classic 8D +12dB bass", boosted)
 }
