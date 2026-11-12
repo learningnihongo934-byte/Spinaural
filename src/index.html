@@ -159,7 +159,7 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
     <h1>Spin<em>aural</em></h1>
   </div>
   <div>
-    <p class="tagline"><b>Stereo in the round.</b> Drop in a song or a video and it comes back circling your head. People call it 8D audio.</p>
+    <p class="tagline"><b>Stereo in the round.</b> Drop in a song or a video and it comes back circling your head. People call it 8D audio. There's a 16D mode too.</p>
     <div class="phones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="7" rx="1.5"/><rect x="17" y="14" width="4" height="7" rx="1.5"/></svg>Put your headphones on</div>
   </div>
 </header>
@@ -230,6 +230,14 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
       <div class="ctl">
         <div class="row"><span class="label">Presets</span><span class="val" id="presetV"></span></div>
         <ul class="presets" id="presets"></ul>
+      </div>
+      <div class="ctl">
+        <div class="row"><span class="label">Mode</span></div>
+        <div class="seg" role="group" aria-label="Mode" id="layers">
+          <button type="button" data-v="8">8D &middot; one voice</button>
+          <button type="button" data-v="16">16D &middot; split layers</button>
+        </div>
+        <p class="hint" id="modeHint"></p>
       </div>
       <div class="ctl">
         <div class="row"><span class="label">Path</span></div>
@@ -306,7 +314,7 @@ footer button{background:none; border:0; padding:0; text-decoration:underline; c
 /* ================== state ================== */
 const $ = (id) => document.getElementById(id);
 const TAU = Math.PI * 2;
-const DEFAULTS = { pattern: 'orbit', dir: 1, lap: 8, dist: 1.6, height: 25, roomType: 'hall', room: 30, bass: true };
+const DEFAULTS = { pattern: 'orbit', dir: 1, lap: 8, dist: 1.6, height: 25, roomType: 'hall', room: 30, bass: true, layers: 8 };
 let S = { ...DEFAULTS };
 try { Object.assign(S, JSON.parse(localStorage.getItem('spinaural.settings') || '{}')); } catch {}
 const save = () => { try { localStorage.setItem('spinaural.settings', JSON.stringify(S)); } catch {} };
@@ -327,6 +335,17 @@ const PRESETS = [
   { no: 'B3', name: 'Late Night', desc: 'Lazy drift, small warm room. Good for lo-fi.', s: { pattern: 'wander', dir: -1, lap: 20, dist: 1.8, height: 15, roomType: 'studio', room: 35, bass: true } },
   { no: 'B4', name: 'Pendulum', desc: 'Swings slowly ear to ear through a big hall.', s: { pattern: 'swing', dir: 1, lap: 10, dist: 2, height: 0, roomType: 'cathedral', room: 32, bass: true } },
 ];
+PRESETS.forEach((p) => { p.s.layers ??= 8; });
+PRESETS.push(
+  { no: 'C1', name: '16D Classic', desc: 'Mids and highs circle you in opposite directions.', s: { pattern: 'orbit', dir: 1, lap: 9, dist: 1.8, height: 30, roomType: 'hall', room: 32, bass: true, layers: 16 } },
+  { no: 'C2', name: 'Crossfire', desc: 'Two fast, tight orbits crossing behind your head.', s: { pattern: 'orbit', dir: -1, lap: 4, dist: 1.3, height: 15, roomType: 'studio', room: 16, bass: true, layers: 16 } },
+  { no: 'C3', name: 'Swarm', desc: 'Every layer wanders off on its own in a big hall.', s: { pattern: 'wander', dir: 1, lap: 11, dist: 2.6, height: 55, roomType: 'cathedral', room: 42, bass: true, layers: 16 } },
+  { no: 'C4', name: 'Tug of War', desc: 'Layers swing ear to ear, pulling against each other.', s: { pattern: 'swing', dir: 1, lap: 7, dist: 1.5, height: 0, roomType: 'hall', room: 22, bass: true, layers: 16 } },
+);
+const MODE_HINTS = {
+  8: 'The whole song moves as one voice around your head.',
+  16: 'The song splits in layers. Bass stays put, mids go one way, highs go the other, faster.',
+};
 const ROOMS = { studio: [1.1, 3.2], hall: [2.4, 2.6], cathedral: [4.6, 2.2] }; // seconds, decay curve
 const RATE = 48000; // render rate (MP3, AAC and Opus all accept it)
 
@@ -352,6 +371,9 @@ function pos(t, s) {
   const behind = Math.max(0, z / Math.max(0.001, Math.hypot(x, z)));
   return { x, y, z, r, cutoff: 17000 * Math.pow(0.3, behind) };
 }
+
+// 16D second voice: the highs go the other way, faster and a bit farther out
+const posB = (t, s) => pos(t + s.lap * 0.3, { ...s, lap: s.lap * 0.62, dir: -s.dir, dist: Math.min(4, s.dist * 1.15) });
 
 /* ================== audio graph ================== */
 const irCache = new WeakMap();
@@ -379,11 +401,22 @@ function buildGraph(ctx, input) {
   input.connect(lp1); lp1.connect(lp2); lp2.connect(g.bass);
   input.connect(hp1); hp1.connect(hp2); hp2.connect(g.hpGate); g.hpGate.connect(pre);
   input.connect(g.full); g.full.connect(pre);
-  g.shadow = ctx.createBiquadFilter(); g.shadow.type = 'lowpass'; g.shadow.Q.value = 0.5; g.shadow.frequency.value = 17000;
-  g.panner = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, rolloffFactor: 0.45, maxDistance: 50, positionZ: -1 });
-  pre.connect(g.shadow); g.shadow.connect(g.panner);
+  const voice = () => {
+    const sh = ctx.createBiquadFilter(); sh.type = 'lowpass'; sh.Q.value = 0.5; sh.frequency.value = 17000;
+    const pn = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, rolloffFactor: 0.45, maxDistance: 50, positionZ: -1 });
+    sh.connect(pn); return [sh, pn];
+  };
+  [g.shadow, g.panner] = voice(); [g.shadowB, g.pannerB] = voice();
+  // 8D: everything into voice A. 16D: mids (LR4 below 2.4 kHz) into A, highs into B.
+  const bq2 = (type) => { const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = 2400; f.Q.value = Math.SQRT1_2; return f; };
+  const m1 = bq2('lowpass'), m2 = bq2('lowpass'), h1 = bq2('highpass'), h2 = bq2('highpass');
+  g.one = ctx.createGain(); g.midG = ctx.createGain(); g.hiG = ctx.createGain();
+  pre.connect(g.one); g.one.connect(g.shadow);
+  pre.connect(m1); m1.connect(m2); m2.connect(g.midG); g.midG.connect(g.shadow);
+  pre.connect(h1); h1.connect(h2); h2.connect(g.hiG); g.hiG.connect(g.shadowB);
   g.dry = ctx.createGain(); g.wet = ctx.createGain(); g.conv = ctx.createConvolver();
-  g.panner.connect(g.dry); g.panner.connect(g.conv); g.conv.connect(g.wet);
+  for (const pn of [g.panner, g.pannerB]) { pn.connect(g.dry); pn.connect(g.conv); }
+  g.conv.connect(g.wet);
   g.mix = ctx.createGain();
   g.bass.connect(g.mix); g.dry.connect(g.mix); g.wet.connect(g.mix);
   g.out = ctx.createDynamicsCompressor();
@@ -396,6 +429,8 @@ function buildGraph(ctx, input) {
 function applyStatic(g, s, ctx) {
   const offline = typeof OfflineAudioContext !== 'undefined' && ctx instanceof OfflineAudioContext;
   const set = (p, v) => offline ? (p.value = v) : p.setTargetAtTime(v, ctx.currentTime, 0.04);
+  const split = s.layers === 16;
+  set(g.one.gain, split ? 0 : 1); set(g.midG.gain, split ? 1 : 0); set(g.hiG.gain, split ? 1.1 : 0);
   set(g.bass.gain, s.bass ? 1 : 0); set(g.hpGate.gain, s.bass ? 1 : 0); set(g.full.gain, s.bass ? 0 : 1);
   const mix = s.room / 100;
   set(g.wet.gain, mix * 0.9 * (0.75 + 0.25 * (s.dist - 1) / 3));
@@ -405,8 +440,8 @@ function applyStatic(g, s, ctx) {
     if (g.roomType === null) g.conv.buffer = impulse(ctx, s.roomType);
     else { // swap in a fresh convolver (some browsers refuse a second buffer)
       const c = ctx.createConvolver(); c.buffer = impulse(ctx, s.roomType);
-      g.panner.disconnect(g.conv); g.conv.disconnect(); g.conv = c;
-      g.panner.connect(c); c.connect(g.wet);
+      g.panner.disconnect(g.conv); g.pannerB.disconnect(g.conv); g.conv.disconnect(); g.conv = c;
+      g.panner.connect(c); g.pannerB.connect(c); c.connect(g.wet);
     }
     g.roomType = s.roomType;
   }
@@ -445,6 +480,13 @@ setInterval(() => {
   live.panner.positionY.setTargetAtTime(p.y, now, k);
   live.panner.positionZ.setTargetAtTime(p.z, now, k);
   live.shadow.frequency.setTargetAtTime(p.cutoff, now, 0.03);
+  if (S.layers === 16) {
+    const q = posB(el.currentTime, S);
+    live.pannerB.positionX.setTargetAtTime(q.x, now, k);
+    live.pannerB.positionY.setTargetAtTime(q.y, now, k);
+    live.pannerB.positionZ.setTargetAtTime(q.z, now, k);
+    live.shadowB.frequency.setTargetAtTime(q.cutoff, now, 0.03);
+  }
 }, 15);
 
 /* ================== loading ================== */
@@ -543,6 +585,14 @@ async function render(buffer, s, onProg) {
   g.panner.positionY.setValueCurveAtTime(Y, 0, dur);
   g.panner.positionZ.setValueCurveAtTime(Z, 0, dur);
   g.shadow.frequency.setValueCurveAtTime(F, 0, dur);
+  if (s.layers === 16) {
+    const X2 = new Float32Array(n), Y2 = new Float32Array(n), Z2 = new Float32Array(n), F2 = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const p = posB(i / cr, s); X2[i] = p.x; Y2[i] = p.y; Z2[i] = p.z; F2[i] = p.cutoff; }
+    g.pannerB.positionX.setValueCurveAtTime(X2, 0, dur);
+    g.pannerB.positionY.setValueCurveAtTime(Y2, 0, dur);
+    g.pannerB.positionZ.setValueCurveAtTime(Z2, 0, dur);
+    g.shadowB.frequency.setValueCurveAtTime(F2, 0, dur);
+  }
   const step = Math.max(1, total / 40);
   try {
     for (let t = step; t < total - 0.05; t += step) {
@@ -662,7 +712,7 @@ async function exportAs(kind) {
   $('status').classList.add('show');
   try {
     const out = await getRendered(prog);
-    const base = file.name.replace(/\.[^.]+$/, '') + ' (8D)';
+    const base = file.name.replace(/\.[^.]+$/, '') + (S.layers === 16 ? ' (16D)' : ' (8D)');
     if (kind === 'mp3') { download(await mp3Blob(out, prog), base + '.mp3'); }
     else if (kind === 'wav') { prog('Writing the WAV', 0.5); await tick(); download(wavBlob(out), base + '.wav'); }
     else { const { blob, ext } = await videoBlob(out, prog); download(blob, base + '.' + ext); }
@@ -728,7 +778,7 @@ async function demoFile() {
 const cv = $('orbit'), g2 = cv.getContext('2d');
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 let colors = {};
-const readColors = () => { colors = { ink: css('--ink'), ink2: css('--ink-2'), ink3: css('--ink-3'), red: css('--red'), paper: css('--card'), line: css('--line') }; };
+const readColors = () => { colors = { ink: css('--ink'), ink2: css('--ink-2'), ink3: css('--ink-3'), red: css('--red'), blue: css('--blue'), paper: css('--card'), line: css('--line') }; };
 readColors();
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readColors);
 
@@ -759,12 +809,18 @@ function draw() {
   g2.textAlign = 'left'; g2.fillText('L', 4, c - 5); g2.textAlign = 'right'; g2.fillText('R', w - 4, c - 5);
   g2.textAlign = 'left'; for (let r = 1; r <= 4; r++) g2.fillText(r + 'm', c + r * sc * 0.707 + 3, c - r * sc * 0.707 - 3);
 
-  // upcoming path
+  // upcoming path(s)
+  const split = S.layers === 16;
   const span = { orbit: S.lap, swing: S.lap, spiral: S.lap * 4, wander: S.lap * 2.5 }[S.pattern];
-  g2.strokeStyle = colors.ink2; g2.globalAlpha = 0.55; g2.lineWidth = 1.5; g2.setLineDash([5, 5]);
-  g2.beginPath();
-  for (let i = 0; i <= 240; i++) { const p = pos(t + span * i / 240, S); i ? g2.lineTo(X(p), Y(p)) : g2.moveTo(X(p), Y(p)); }
-  g2.stroke(); g2.setLineDash([]); g2.globalAlpha = 1;
+  const voices = split ? [[pos, colors.red], [posB, colors.blue]] : [[pos, colors.red]];
+  g2.lineWidth = 1.5; g2.setLineDash([5, 5]);
+  for (const [fn, col] of voices) {
+    g2.strokeStyle = split ? col : colors.ink2; g2.globalAlpha = split ? 0.45 : 0.55;
+    g2.beginPath();
+    for (let i = 0; i <= 240; i++) { const p = fn(t + span * i / 240, S); i ? g2.lineTo(X(p), Y(p)) : g2.moveTo(X(p), Y(p)); }
+    g2.stroke();
+  }
+  g2.setLineDash([]); g2.globalAlpha = 1;
 
   // head
   const hr = Math.max(16, 0.42 * sc);
@@ -781,21 +837,27 @@ function draw() {
     g2.fillText('ORIGINAL STEREO', c, c + hr + 34);
     return;
   }
-  // trail
-  const now = pos(t, S);
+  for (const [fn, col] of voices) drawVoice(fn, col, t, X, Y, c);
+  if (split) { // legend
+    g2.font = '500 11px "IBM Plex Mono", monospace'; g2.textAlign = 'left';
+    g2.fillStyle = colors.red; g2.beginPath(); g2.arc(10, w - 30, 5, 0, TAU); g2.fill(); g2.fillStyle = colors.ink2; g2.fillText('MIDS', 20, w - 26);
+    g2.fillStyle = colors.blue; g2.beginPath(); g2.arc(10, w - 12, 5, 0, TAU); g2.fill(); g2.fillStyle = colors.ink2; g2.fillText('HIGHS', 20, w - 8);
+  }
+}
+function drawVoice(fn, col, t, X, Y, c) {
+  const now = fn(t, S);
   g2.lineCap = 'round';
   for (let i = 0; i < 40; i++) {
-    const a = pos(t - 1.4 * (i + 1) / 40, S), b = pos(t - 1.4 * i / 40, S);
-    g2.strokeStyle = colors.red; g2.globalAlpha = (1 - i / 40) * 0.8; g2.lineWidth = 5 * (1 - i / 40) + 1;
+    const a = fn(t - 1.4 * (i + 1) / 40, S), b = fn(t - 1.4 * i / 40, S);
+    g2.strokeStyle = col; g2.globalAlpha = (1 - i / 40) * 0.8; g2.lineWidth = 5 * (1 - i / 40) + 1;
     g2.beginPath(); g2.moveTo(X(a), Y(a)); g2.lineTo(X(b), Y(b)); g2.stroke();
   }
   g2.globalAlpha = 1;
-  // sightline + dot (size shows height)
-  g2.strokeStyle = colors.red; g2.lineWidth = 1; g2.setLineDash([2, 4]);
+  g2.strokeStyle = col; g2.lineWidth = 1; g2.setLineDash([2, 4]);
   g2.beginPath(); g2.moveTo(c, c); g2.lineTo(X(now), Y(now)); g2.stroke(); g2.setLineDash([]);
   const rad = 9 + now.y * 4;
   if (now.y > 0.05) { g2.fillStyle = colors.ink; g2.globalAlpha = 0.18; g2.beginPath(); g2.arc(X(now) + now.y * 6, Y(now) + now.y * 8, rad, 0, TAU); g2.fill(); g2.globalAlpha = 1; }
-  g2.fillStyle = colors.red; g2.strokeStyle = colors.ink; g2.lineWidth = 2;
+  g2.fillStyle = col; g2.strokeStyle = colors.ink; g2.lineWidth = 2;
   g2.beginPath(); g2.arc(X(now), Y(now), rad, 0, TAU); g2.fill(); g2.stroke();
   g2.fillStyle = colors.paper; g2.beginPath(); g2.arc(X(now), Y(now), 2.5, 0, TAU); g2.fill();
 }
@@ -834,12 +896,14 @@ function bindRange(id, key, fmtV) {
 }
 function changed() {
   $('patHint').textContent = HINTS[S.pattern];
+  $('modeHint').textContent = MODE_HINTS[S.layers];
   const hit = PRESETS.find((p) => Object.keys(p.s).every((k) => p.s[k] === S[k]));
   $('presets').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(!!hit && b.dataset.no === hit.no)));
   $('presetV').textContent = hit ? hit.name : 'Custom';
   if (live) applyStatic(live, S, actx);
   save();
 }
+bindSeg('layers', 'layers', Number);
 bindSeg('pattern', 'pattern');
 bindSeg('dir', 'dir', Number);
 bindSeg('roomType', 'roomType');
