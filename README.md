@@ -8,6 +8,7 @@ Live at **https://spinaural.rennko.tech**
 - Hear the effect live and flip between the 8D version and the original (press `B`).
 - **16D mode** splits the song into layers. The bass stays in the middle, the mids orbit one way, and the highs orbit the other way, faster and farther out.
 - 12 presets, including Classic 8D, Slow Dream, Fast Spin, 16D Classic, Crossfire and Swarm.
+- Bass boost up to +12 dB, kept separate from the presets.
 - Shape the motion: Orbit, Spiral, Ear to ear or Wander paths. You can also set the direction, lap time, distance, rise and fall, and room echo, and keep the bass centered.
 - Save the result as an MP3 (320 kbps) or a WAV. Videos can also be saved with the picture untouched and the 8D sound swapped in.
 
